@@ -1,0 +1,24 @@
+==== DOCKER llama-bench MXFP4 Sat 07/18/2026 20:09:33.02 ==== 
+--- Free VRAM: unload LM Studio model server --- 
+ERROR: The process "llama-server.exe" not found.
+--- Run llama-bench MXFP4: batch 8192, ubatch 4096 vs 8192 --- 
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 32606 MiB):
+  Device 0: NVIDIA GeForce RTX 5090, compute capability 12.0, VMM: yes, VRAM: 32606 MiB
+load_backend: loaded CUDA backend from /app/libggml-cuda.so
+load_backend: loaded CPU backend from /app/libggml-cpu-zen4.so
+| model                          |       size |     params | backend    | ngl | n_batch | n_ubatch |  fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | ------: | -------: | --: | --------------: | -------------------: |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     4096 |   1 |          pp2048 |     2662.59 ± 893.96 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     4096 |   1 |          pp4096 |    8211.55 ± 1307.50 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     4096 |   1 |          pp8192 |    11569.54 ± 197.20 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     4096 |   1 |         pp16384 |     11630.69 ± 62.01 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     4096 |   1 |           tg128 |        218.13 ± 0.56 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     8192 |   1 |          pp2048 |     11772.05 ± 53.45 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     8192 |   1 |          pp4096 |     11878.23 ± 24.15 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     8192 |   1 |          pp8192 |     11191.94 ± 28.97 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     8192 |   1 |         pp16384 |      11239.00 ± 9.45 |
+| qwen35moe 35B.A3B MXFP4 MoE    |  20.65 GiB |    35.51 B | CUDA       |  99 |    8192 |     8192 |   1 |           tg128 |        218.86 ± 1.21 |
+
+build: 86a9c79f8 (10066)
+EXIT_CODE=0 
+==== DONE ==== 

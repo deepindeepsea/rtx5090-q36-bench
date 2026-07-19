@@ -1,0 +1,69 @@
+==== DOCKER llama-bench Sat 07/18/2026 19:42:58.47 ==== 
+--- Free VRAM: unload LM Studio model server --- 
+SUCCESS: The process "llama-server.exe" with PID 8148 has been terminated.
+--- Pull image ghcr.io/ggml-org/llama.cpp:full-cuda --- 
+full-cuda: Pulling from ggml-org/llama.cpp
+8a5dd8049040: Pulling fs layer
+5a7813e071bf: Pulling fs layer
+05ec76e31584: Pulling fs layer
+3d6ab8c799cd: Pulling fs layer
+398182656c47: Pulling fs layer
+e51deb0a94bd: Pulling fs layer
+a35ee9f7440d: Pulling fs layer
+73389fbd088f: Pulling fs layer
+7209097bfb98: Pulling fs layer
+a102f36d092c: Pulling fs layer
+cbb9175a9bc5: Pulling fs layer
+545a3ada5b6b: Pulling fs layer
+4f4fb700ef54: Pulling fs layer
+c52b04b09446: Pulling fs layer
+4f4fb700ef54: Already exists
+545a3ada5b6b: Download complete
+398182656c47: Download complete
+73389fbd088f: Download complete
+7209097bfb98: Download complete
+3d6ab8c799cd: Download complete
+a102f36d092c: Download complete
+5a7813e071bf: Download complete
+5a7813e071bf: Pull complete
+a102f36d092c: Pull complete
+05ec76e31584: Download complete
+398182656c47: Pull complete
+73389fbd088f: Pull complete
+05ec76e31584: Pull complete
+c52b04b09446: Download complete
+a35ee9f7440d: Download complete
+e51deb0a94bd: Download complete
+8a5dd8049040: Download complete
+cbb9175a9bc5: Download complete
+545a3ada5b6b: Pull complete
+7209097bfb98: Pull complete
+3d6ab8c799cd: Pull complete
+cbb9175a9bc5: Pull complete
+e51deb0a94bd: Pull complete
+c52b04b09446: Pull complete
+a35ee9f7440d: Pull complete
+4f4fb700ef54: Pull complete
+8a5dd8049040: Pull complete
+Digest: sha256:728b6760cb7975158b8be227120f36325da4017bcbb8a3ae83954c9bcb2ddc34
+Status: Downloaded newer image for ghcr.io/ggml-org/llama.cpp:full-cuda
+ghcr.io/ggml-org/llama.cpp:full-cuda
+ 
+--- Run llama-bench (prefill sweep) --- 
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 32606 MiB):
+  Device 0: NVIDIA GeForce RTX 5090, compute capability 12.0, VMM: yes, VRAM: 32606 MiB
+load_backend: loaded CUDA backend from /app/libggml-cuda.so
+load_backend: loaded CPU backend from /app/libggml-cpu-zen4.so
+| model                          |       size |     params | backend    | ngl |  fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |   1 |           pp512 |     1485.42 ± 224.03 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |   1 |          pp1024 |     3848.86 ± 869.47 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |   1 |          pp2048 |     7080.16 ± 138.54 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |   1 |          pp4096 |      7528.68 ± 43.47 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |   1 |          pp8192 |      7447.51 ± 12.94 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |   1 |         pp16384 |      7284.05 ± 29.78 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |   1 |           tg128 |        243.94 ± 3.67 |
+
+build: 86a9c79f8 (10066)
+EXIT_CODE=0 
+==== DONE ==== 

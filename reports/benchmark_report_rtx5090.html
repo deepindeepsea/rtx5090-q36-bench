@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTX 5090 LLM Inference Benchmark — Qwen3.6-35B-A3B (llama.cpp vs q36)</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#171e2e; --panel2:#1d2740; --ink:#e8ecf5; --muted:#9aa7bd;
+    --line:#2a3550; --accent:#5b9dff; --good:#43d17a; --warn:#ffb454; --bad:#ff6b6b;
+    --q36:#c084fc; --llama:#5b9dff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px}
+  h2{font-size:23px;margin:44px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:18px;margin:26px 0 8px;color:var(--accent)}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:15px}
+  code{background:#0b1020;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:13.5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .stat .n{font-size:26px;font-weight:700}
+  .stat .l{color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.04em}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.5px}
+  th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{background:var(--panel2);color:var(--muted);font-weight:600;font-size:13px;
+    text-transform:uppercase;letter-spacing:.03em}
+  tbody tr:hover{background:#0b1020}
+  .best{color:var(--good);font-weight:700}
+  .callout{border-left:4px solid var(--accent);background:var(--panel2);
+    border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0}
+  .callout.good{border-color:var(--good)} .callout.warn{border-color:var(--warn)}
+  .tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:20px;
+    background:var(--panel2);border:1px solid var(--line);color:var(--muted);margin-left:8px}
+  .bar{height:22px;border-radius:5px;background:linear-gradient(90deg,#2b6fe0,#5b9dff);display:inline-block;vertical-align:middle}
+  .barrow{display:flex;align-items:center;gap:10px;margin:6px 0}
+  .barrow .lab{width:190px;color:var(--muted);font-size:13.5px}
+  .barrow .val{font-variant-numeric:tabular-nums;font-weight:600}
+  .analogy{background:#12261c;border:1px solid #1f6b3f;border-radius:10px;padding:12px 16px;margin:14px 0}
+  .analogy b{color:var(--good)}
+  ul{margin:10px 0 10px 4px;padding-left:20px}
+  li{margin:6px 0}
+  .foot{color:var(--muted);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+  .pill{font-size:12px;padding:2px 8px;border-radius:6px}
+  .pill.llama{background:#12233f;color:#8bbcff;border:1px solid #244a7d}
+  .pill.q36{background:#241436;color:#d3aaff;border:1px solid #5a2f86}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Making a 35B model fly on an RTX 5090</h1>
+  <p class="sub">Prefill &amp; decode benchmarks — Qwen3.6-35B-A3B, llama.cpp vs the <code>q36</code> custom CUDA engine · July 18, 2026</p>
+
+  <div class="card">
+    <p style="margin-top:0"><b>The one-paragraph version.</b> We measured how fast a 35-billion-parameter language model runs on an RTX 5090, starting from an off-the-shelf setup and ending with a hand-optimized engine. By fixing a single setting in llama.cpp we nearly <b>doubled</b> prompt-processing speed (7.5k&nbsp;&rarr;&nbsp;11.9k tokens/sec). Then we built <code>q36</code>, a research engine written specifically for this GPU, and reproduced its headline number: <b>~13,000 tokens/sec</b> prefill and <b>~260 tokens/sec</b> generation. This report explains every term and every result in plain language.</p>
+  </div>
+
+  <div class="grid">
+    <div class="stat"><div class="l">GPU</div><div class="n">RTX 5090</div><div class="sub">32 GB · Blackwell (sm_120)</div></div>
+    <div class="stat"><div class="l">Model</div><div class="n">35B-A3B</div><div class="sub">Qwen3.6 · hybrid MoE</div></div>
+    <div class="stat"><div class="l">Best prefill</div><div class="n" style="color:var(--q36)">13.0k t/s</div><div class="sub">q36 engine</div></div>
+    <div class="stat"><div class="l">Best decode</div><div class="n" style="color:var(--q36)">260 t/s</div><div class="sub">q36 engine</div></div>
+  </div>
+
+  <h2>1 · What are we even measuring?</h2>
+  <p>When you talk to an LLM, the work happens in two very different phases. Understanding them is the whole point of this report.</p>
+
+  <h3>Prefill — "reading the prompt"</h3>
+  <p>Before the model can answer, it has to read everything you gave it — your question, the documents, the chat history. It processes <em>all of those input tokens at once</em>, in parallel. This is called <b>prefill</b> (a.k.a. prompt processing, or <code>pp</code>).</p>
+  <div class="analogy"><b>Analogy:</b> Prefill is a student skimming the entire exam paper before writing anything. They can read many lines at the same time. A fast reader gets to the first answer sooner — that's your <em>"time to first token."</em></div>
+  <p>Prefill is <b>compute-bound</b>: it's limited by how many math operations (matrix multiplies) the GPU can crunch per second. A beefy GPU with thousands of cores shines here — <em>if</em> you keep those cores busy (more on that below).</p>
+
+  <h3>Decode — "writing the answer"</h3>
+  <p>Once the prompt is read, the model writes its reply <b>one token at a time</b>. Each new token depends on the one before it, so this part is sequential. This is <b>decode</b> (a.k.a. token generation, or <code>tg</code>).</p>
+  <div class="analogy"><b>Analogy:</b> Decode is the student writing the answer word by word, and before writing each word they must re-skim their entire memory of the model. You can't write word #50 until word #49 exists.</div>
+  <p>Decode is <b>memory-bandwidth-bound</b>: to produce each single token, the GPU must read the model's active weights out of its memory. It's limited by how fast data moves, not by raw math. This is why decode is usually the slower, "streaming" part you watch tick by on screen.</p>
+
+  <div class="callout"><b>Why both matter.</b> Long prompt, short answer (summarizing a document, RAG, coding agents)? <b>Prefill</b> dominates your wait. Short prompt, long answer (chat, essays)? <b>Decode</b> dominates. A good engine has to win both.</div>
+
+  <p>Everything is measured in <b>tokens per second (t/s)</b> — higher is better. A token is roughly ¾ of a word.</p>
+
+  <h2>2 · The setup</h2>
+  <ul>
+    <li><b>GPU:</b> NVIDIA RTX 5090, 32 GB GDDR7 (~1.79 TB/s memory bandwidth), Blackwell architecture (compute capability 12.0, <code>sm_120</code>), driver 610.47.</li>
+    <li><b>Model:</b> Qwen3.6-35B-A3B — 35.5B total parameters but a <b>Mixture-of-Experts</b>: only ~3B are actually used per token ("A3B" = active 3B). It's also a <b>hybrid</b> design — 10 classic attention layers + 30 lightweight recurrent (SSM / gated-DeltaNet) layers, which keeps its memory footprint small at long context.</li>
+    <li><b>Two weight formats tested:</b> <code>Q4_K_M</code> (19.7 GB) and <code>MXFP4</code> (20.6 GB) — both ~4-bit compressions of the model (see §5).</li>
+    <li><b>How we ran it:</b> everything inside Docker containers on the GPU, so results are clean and reproducible. llama.cpp came from its official CUDA image; <code>q36</code> we compiled from source in a CUDA 13.1 container.</li>
+  </ul>
+
+  <h2>3 · Run-by-run results</h2>
+
+  <h3>Run A — Starting point: LM Studio <span class="tag">rough, client-side</span></h3>
+  <p>We first measured the model as it was already running in <b>LM Studio</b> (a friendly desktop app) by timing its API. This is the "naive" number — it includes app overhead and a simple timing trick, so it <em>understates</em> the true engine speed. Useful only as a "before" picture.</p>
+  <table>
+    <thead><tr><th>Metric</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Prefill (peak)</td><td>~2,500 t/s</td></tr>
+      <tr><td>Decode</td><td>~86 t/s</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn"><b>Postscript — can we make LM Studio itself fast?</b> We later raised LM Studio's <b>micro-batch (Physical Batch Size) from 512 → 4096</b> and turned on Flash Attention. Its own engine stat (from the server log) rose to <b>~5,177 t/s</b> prompt-eval — proving the "2,500" was mostly measurement overhead (my client timer counts HTTP + tokenization that the engine doesn't). But it still won't reach 11k: LM Studio's bundled <b>CUDA-12 runtime disables this hybrid model's fused Gated-DeltaNet SSM kernel on the GPU</b> ("not supported") and puts a layer on CPU. We tried switching LM Studio to its alternate CUDA runtime to fix that; it hung on load and was reverted. <b>Takeaway:</b> inside LM Studio, the batch flag is a real ~2× win, but the full 11–13k needs the CUDA-13 kernels only the standalone path (Docker llama.cpp / q36) currently delivers for this model.</div>
+
+  <h3>Run B — llama.cpp, out of the box <span class="tag">the real baseline</span></h3>
+  <p>Next, the proper tool: <code>llama-bench</code>, the official benchmarking utility of <b>llama.cpp</b> (the engine under the hood of most local-LLM apps). Default settings, <code>Q4_K_M</code> weights, all layers on the GPU.</p>
+  <table>
+    <thead><tr><th>Test</th><th>tokens/sec</th></tr></thead>
+    <tbody>
+      <tr><td>Prefill 2,048 (pp2048)</td><td>7,080</td></tr>
+      <tr><td>Prefill 4,096</td><td>7,529</td></tr>
+      <tr><td>Prefill 8,192</td><td>7,448</td></tr>
+      <tr><td>Prefill 16,384</td><td>7,284</td></tr>
+      <tr><td>Decode 128 (tg128)</td><td>244</td></tr>
+    </tbody>
+  </table>
+  <p>Already ~3× the "naive" prefill number, just by using the right tool with sane defaults. Decode jumped to 244 t/s. But we left a lot on the table…</p>
+
+  <h3>Run C — llama.cpp, tuned <span class="tag" style="color:var(--good)">the big win 🎉</span></h3>
+  <p>We changed <b>one setting</b>: the <b>micro-batch size</b> (<code>-ub</code>), from the default 512 up to 4096–8192. (Explained in §4.) Nothing else changed.</p>
+  <div class="barrow"><span class="lab">Default (ub=512)</span><span class="bar" style="width:180px"></span><span class="val">7,529 t/s</span></div>
+  <div class="barrow"><span class="lab">Tuned Q4_K_M (ub=4096)</span><span class="bar" style="width:272px"></span><span class="val">11,383 t/s</span></div>
+  <div class="barrow"><span class="lab">Tuned MXFP4 (ub=8192)</span><span class="bar" style="width:284px;background:linear-gradient(90deg,#2b6fe0,#8bbcff)"></span><span class="val">11,878 t/s</span></div>
+  <p>Peak prefill went from <b>7.5k → 11.9k t/s</b> — a <b>+58%</b> free speed-up. This single flag is what pushes llama.cpp past the ~10k mark. Decode was unchanged (~220–247 t/s), which makes sense — batching helps prefill, not one-at-a-time decode.</p>
+  <table>
+    <thead><tr><th>Config</th><th>pp2048</th><th>pp4096</th><th>pp8192</th><th>pp16384</th><th>tg128</th></tr></thead>
+    <tbody>
+      <tr><td>Q4_K_M, ub=512 (default)</td><td>7,080</td><td>7,529</td><td>7,448</td><td>7,284</td><td>244</td></tr>
+      <tr><td>Q4_K_M, ub=4096</td><td>11,125</td><td>11,383</td><td>11,303</td><td>—</td><td class="best">247</td></tr>
+      <tr><td>MXFP4, ub=8192</td><td class="best">11,772</td><td class="best">11,878</td><td>11,192</td><td>11,239</td><td>219</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn"><b>Surprise:</b> switching to <code>MXFP4</code> weights did <em>not</em> beat <code>Q4_K_M</code> in llama.cpp — prefill was a tie and MXFP4 decode was actually a bit slower (219 vs 247). That's a clue: llama.cpp isn't taking full advantage of MXFP4 on this GPU. Hold that thought.</div>
+
+  <h3>Run D — q36, the purpose-built engine <span class="tag" style="color:var(--q36)">the main event</span></h3>
+  <p><code>q36</code> is an open-source engine (by Ambud Sharma) written for exactly one thing: <em>this model on this GPU</em>. It's ~10k lines of hand-tuned C/CUDA with no general-purpose baggage. We compiled it for Blackwell (<code>sm_120a</code>, CUDA 13.1) and ran the identical sweep on the <code>MXFP4</code> weights.</p>
+  <table>
+    <thead><tr><th>Test</th><th class="pill llama">llama.cpp best</th><th class="pill q36">q36</th><th>q36 advantage</th></tr></thead>
+    <tbody>
+      <tr><td>Prefill 2,048</td><td>11,772</td><td class="best">13,020</td><td>+11%</td></tr>
+      <tr><td>Prefill 4,096</td><td>11,878</td><td>12,831</td><td>+8%</td></tr>
+      <tr><td>Prefill 8,192</td><td>11,192</td><td>12,461</td><td>+11%</td></tr>
+      <tr><td>Prefill 16,384</td><td>11,239</td><td>11,768</td><td>+5%</td></tr>
+      <tr><td>Decode (fresh)</td><td>218</td><td class="best">259.6</td><td>+19%</td></tr>
+      <tr><td>Decode @ 2k context</td><td>—</td><td>255.8</td><td>—</td></tr>
+      <tr><td>Decode @ 16k context</td><td>—</td><td>241.5</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <div class="callout good"><b>We reproduced the headline.</b> q36's README claims 13.4k prefill; we measured <b>13,020</b> (the small gap is our Docker/WSL layer vs his bare-metal Linux). Decode is where it really pulls ahead: <b>+19%</b>, and it barely slows down as context grows (241 t/s even at 16k).</div>
+
+  <h3>Run E — The 90k-context stress test <span class="tag" style="color:var(--good)">done ✓</span></h3>
+  <p>q36's README advertises fast prefill even at a <b>90,000-token</b> context (7.6k t/s) — the kind of workload that chokes most setups. We hadn't tried it, so we ran it as a final experiment.</p>
+  <table>
+    <thead><tr><th>Test</th><th>tokens/sec</th><th>vs short context</th></tr></thead>
+    <tbody>
+      <tr><td>Prefill 2,048 (reference)</td><td>12,982</td><td>—</td></tr>
+      <tr><td class="best">Prefill 90,112</td><td class="best">7,879</td><td>−39%</td></tr>
+      <tr><td>Decode, fresh context</td><td>258.5</td><td>—</td></tr>
+      <tr><td>Decode @ 90,112 context</td><td>178.8</td><td>−31%</td></tr>
+    </tbody>
+  </table>
+  <div class="callout good"><b>It holds up remarkably well.</b> Feeding a 90,000-token prompt (≈ a 300-page book), q36 still processes it at <b>7,879 t/s</b> — matching the README's 7.6k claim, and only 39% slower than at 2k despite <b>44× more context</b>. That flatness is the hybrid design paying off: only 10 of 40 layers do expensive attention, so context grows cheaply. Decode at that depth eases to <b>179 t/s</b> (from 258) because each new token must now scan 90k tokens of memory — expected, and still very usable.</div>
+  <p class="sub">Perspective: a 90k-token prompt is roughly a 300-page book — read (prefilled) in about 11 seconds.</p>
+
+  <h2>4 · The single most important knob: micro-batch (<code>-ub</code>)</h2>
+  <p>This one setting caused our biggest jump, so it's worth understanding.</p>
+  <p>When you feed the model a long prompt, the GPU doesn't process all the tokens in one giant step — it chops them into chunks. The <b>micro-batch size</b> is how many tokens go in each chunk.</p>
+  <div class="analogy"><b>Analogy — shoveling snow:</b> The RTX 5090 has ~21,000 tiny "cores" (workers). The micro-batch is how big a scoop each worker takes. With the default scoop of <b>512</b>, most of your 21,000 workers stand around idle. Bump the scoop to <b>8,192</b> and everyone's working at once — same snow, far fewer trips, nearly <b>2× the speed</b>.</div>
+  <ul>
+    <li><code>-ub</code> (micro-batch): tokens crunched per GPU pass. <b>This is the lever.</b></li>
+    <li><code>-b</code> (batch): the bigger outer chunk fed to the scheduler; must be ≥ <code>-ub</code>.</li>
+  </ul>
+  <p>Why doesn't this help decode? Because decode is <em>one token at a time</em> by nature — there's nothing to batch. Bigger scoops only help when there's a pile to move (prefill).</p>
+
+  <h2>5 · The weight formats: Q4_K_M vs MXFP4</h2>
+  <p>A raw 35B model is huge. To fit it in 32 GB and move it fast, the weights are <b>quantized</b> — compressed from 16-bit numbers down to ~4 bits each. We tested two 4-bit schemes:</p>
+  <ul>
+    <li><b>Q4_K_M</b> — llama.cpp's well-established 4-bit format. Great all-rounder.</li>
+    <li><b>MXFP4</b> — a newer 4-bit <em>floating-point</em> format that Blackwell GPUs can process with dedicated hardware. In theory, faster on a 5090.</li>
+  </ul>
+  <div class="callout"><b>The twist that explains q36.</b> In llama.cpp, MXFP4 was <em>no faster</em> than Q4_K_M — the generic engine doesn't use Blackwell's native FP4 hardware paths. q36 <em>does</em>, with custom kernels. That's a big part of why q36 wins: it's not a better algorithm so much as <b>hardware it actually knows how to drive.</b></div>
+
+  <h2>6 · What optimizations actually helped</h2>
+  <table>
+    <thead><tr><th>Optimization</th><th>What it does (plain English)</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>Bigger micro-batch</td><td>Keeps all 21,000 GPU cores busy during prefill instead of a fraction</td><td class="best">+58% prefill</td></tr>
+      <tr><td>q36: native MXFP4 / W4A8 tensor-core math</td><td>Uses Blackwell's built-in 4-bit matrix hardware for the expert layers</td><td>part of q36's edge</td></tr>
+      <tr><td>q36: tensor-core FlashAttention</td><td>Fuses the attention math so it runs in one efficient pass</td><td>faster prefill</td></tr>
+      <tr><td>q36: CUDA graphs, zero host-sync decode</td><td>Pre-records the per-token work so the CPU doesn't babysit the GPU each step</td><td class="best">+19% decode</td></tr>
+      <tr><td>q36: hybrid SSM handling</td><td>Runs the 30 recurrent layers natively, keeping memory tiny at long context</td><td>flat speed at 90k</td></tr>
+    </tbody>
+  </table>
+
+  <h2>7 · The ceiling: decode is capped by memory bandwidth</h2>
+  <p>Here's the concept that predicts performance on <em>any</em> GPU before you run a thing. Because decode must stream the model's active weights from memory for every single token, its speed is:</p>
+  <p style="text-align:center;font-size:18px"><b>max tokens/sec = memory bandwidth ÷ bytes read per token</b></p>
+  <p>For this model each token needs about <b>2.7 GB</b> read from memory. That gives a hard "roofline" per GPU (and a realistic ~65% of it after real-world losses):</p>
+  <table>
+    <thead><tr><th>GPU</th><th>Bandwidth</th><th>Roofline t/s</th><th>Realistic (~65%)</th></tr></thead>
+    <tbody>
+      <tr><td>RTX 5090</td><td>1.79 TB/s</td><td>656</td><td>427</td></tr>
+      <tr><td>RTX 4090</td><td>1.01 TB/s</td><td>369</td><td>240</td></tr>
+      <tr><td>A100 80G</td><td>2.04 TB/s</td><td>747</td><td>485</td></tr>
+      <tr><td>H100 SXM</td><td>3.35 TB/s</td><td>1,227</td><td>797</td></tr>
+      <tr><td>B200</td><td>8.0 TB/s</td><td>2,930</td><td>1,904</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Reality check:</b> our best decode (q36, 260 t/s) is only ~40% of the 5090's 656 roofline — <em>below</em> the realistic line. Even the fastest engine leaves decode headroom on the table. Decode is a bandwidth problem, not a compute problem.</div>
+
+  <h2>8 · What this means for the AMD endgame</h2>
+  <p>The goal beyond today is porting q36's ideas to AMD ROCm on a <b>Radeon AI Pro R9700</b> and a <b>Strix Halo</b> mini-PC. The roofline tells us what to expect <em>before</em> writing any code:</p>
+  <ul>
+    <li><b>Radeon AI Pro R9700</b> (~640 GB/s): decode ceiling ≈ 234 t/s theoretical (~150 realistic) — roughly ⅓ of the 5090. Prefill (compute-bound) could still be strong.</li>
+    <li><b>Strix Halo</b> (unified LPDDR5X, ~256 GB/s): decode ceiling ≈ 94 t/s (~60 realistic). Its superpower is <b>capacity</b> — it can hold very large models in unified memory — not raw speed.</li>
+  </ul>
+  <p>Takeaway: porting the kernels won't make an AMD part decode like a 5090 — the memory bus sets the limit. The win on AMD will come from <b>prefill</b> and from <b>fitting bigger models</b>, not from out-decoding NVIDIA.</p>
+
+  <h2>9 · The persistent lab (how to poke at it yourself)</h2>
+  <p>q36 is built and waiting in a running container called <code>q36dev</code>. To jump in:</p>
+  <div class="card" style="font-family:ui-monospace,Consolas,monospace;font-size:13.5px;background:#0b1020">
+    <div># open a shell inside the engine's container</div>
+    <div>docker exec -it q36dev bash</div>
+    <div style="margin-top:10px"># re-run the throughput benchmark</div>
+    <div>./q36_bench -m /models/unsloth/Qwen3.6-35B-A3B-MXFP4_MOE.gguf -p 2048,8192 -n 128 -d 0,16384</div>
+    <div style="margin-top:10px"># chat with the model interactively</div>
+    <div>./q36 -m /models/unsloth/Qwen3.6-35B-A3B-MXFP4_MOE.gguf</div>
+    <div style="margin-top:10px"># or start its OpenAI-compatible server</div>
+    <div>./q36_server -m /models/unsloth/Qwen3.6-35B-A3B-MXFP4_MOE.gguf --port 8080 --ctx 32768</div>
+  </div>
+  <p class="sub">Tip: to watch any of our runs live, tail the log — <code>Get-Content &lt;logfile&gt; -Wait -Tail 40</code> in PowerShell.</p>
+
+  <h2>10 · Bottom line</h2>
+  <div class="grid">
+    <div class="stat"><div class="l">Naive → tuned llama.cpp</div><div class="n" style="color:var(--good)">+58%</div><div class="sub">prefill, one flag</div></div>
+    <div class="stat"><div class="l">llama.cpp → q36</div><div class="n" style="color:var(--q36)">+11% / +19%</div><div class="sub">prefill / decode</div></div>
+    <div class="stat"><div class="l">q36 prefill</div><div class="n">13.0k t/s</div><div class="sub">matches published claim</div></div>
+    <div class="stat"><div class="l">q36 decode</div><div class="n">260 t/s</div><div class="sub">~40% of roofline (headroom left)</div></div>
+  </div>
+  <p>Two lessons for an engineer: (1) <b>the right setting beats a better GPU</b> — one micro-batch flag nearly doubled throughput for free. (2) <b>Specialized code beats general code</b> — q36 wins by driving hardware features generic engines ignore, but even it hasn't hit the memory-bandwidth ceiling, so the story isn't over.</p>
+
+  <div class="foot">
+    Generated July 18, 2026 · RTX 5090 · Qwen3.6-35B-A3B (MXFP4 / Q4_K_M) · llama.cpp build 10066 vs q36 (CUDA 13.1.2, sm_120a).
+    All numbers are tokens/sec, mean of 3 runs, measured via <code>llama-bench</code> and <code>q36_bench</code>. Benchmarks run in Docker on Windows (WSL2) — bare-metal Linux would be a few % faster.
+  </div>
+
+</div>
+</body>
+</html>

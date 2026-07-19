@@ -1,0 +1,38 @@
+==== q36dev persistent container Sat 07/18/2026 20:43:29.51 ==== 
+ERROR: The process "llama-server.exe" not found.
+--- remove old q36dev if present --- 
+Error response from daemon: No such container: q36dev
+--- start persistent container (sleep infinity) --- 
+873de86902ac32916a67b45143052a3b6f055c813063806deca0c9dfb51eea26
+--- build q36 + run 90k experiment --- 
+=== toolchain (git, build-essential, tmux, vim) ===
+debconf: delaying package configuration, since apt-utils is not installed
+=== clone + build q36 (cli, bench, server) ===
+Cloning into 'q36'...
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c main.c -o main.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c tokenizer.c -o tokenizer.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c q36_cuda.cu -o q36_cuda.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c q36_engine.cu -o q36_engine.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c gguf.c -o gguf.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c q36_model.c -o q36_model.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c bench.c -o bench.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread -c server.c -o server.o
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread main.o tokenizer.o q36_cuda.o q36_engine.o gguf.o q36_model.o -o q36
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread bench.o q36_cuda.o q36_engine.o gguf.o q36_model.o -o q36_bench
+nvcc -O3 -std=c++17 -gencode arch=compute_120a,code=sm_120a --use_fast_math -lineinfo -Xcompiler -fopenmp --default-stream per-thread server.o tokenizer.o q36_cuda.o q36_engine.o gguf.o q36_model.o -o q36_server
+=== SETUP_DONE ===
+=== 90k experiment: prefill 2048 & 90112, decode at depth 0 & 90112 ===
+using GPU 0 (30.2 GiB free)
+MTP: nextn module uploaded (self-speculative decode available)
+loaded in 61.2s | ctx 90304 | kv fp16 | gpus 1
+[pdl] 902/902 kernel edges -> programmatic
+
+| model | test | t/s |
+|---|---|---:|
+| Qwen3.6-35B-A3B-MXFP4_MOE.gguf | pp2048 | 12981.5 ± 60.4 |
+| Qwen3.6-35B-A3B-MXFP4_MOE.gguf | pp90112 | 7879.0 ± 8.7 |
+| Qwen3.6-35B-A3B-MXFP4_MOE.gguf | tg128 | 258.5 ± 0.4 |
+| Qwen3.6-35B-A3B-MXFP4_MOE.gguf | tg128 @ d90112 | 178.8 ± 0.2 |
+=== 90K_DONE ===
+EXIT_CODE=0 
+==== DONE ==== 

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Porting q36 to ROCm / RDNA4 — Radeon AI PRO R9700 plan</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#171e2e; --panel2:#1d2740; --ink:#e8ecf5; --muted:#9aa7bd;
+    --line:#2a3550; --accent:#5b9dff; --good:#43d17a; --warn:#ffb454; --bad:#ff6b6b;
+    --amd:#ed1c24; --nv:#76b900; --q36:#c084fc;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:29px;line-height:1.2;margin:0 0 6px}
+  h2{font-size:22px;margin:44px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:18px;margin:24px 0 8px;color:var(--accent)}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:15px}
+  code{background:#0b1020;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:13px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .stat .n{font-size:23px;font-weight:700}
+  .stat .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{background:var(--panel2);color:var(--muted);font-weight:600;font-size:12px;
+    text-transform:uppercase;letter-spacing:.03em}
+  tbody tr:hover{background:#0b1020}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .callout{border-left:4px solid var(--accent);background:var(--panel2);
+    border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0}
+  .callout.good{border-color:var(--good)} .callout.warn{border-color:var(--warn)} .callout.bad{border-color:var(--bad)}
+  .pill{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:20px;font-weight:600;white-space:nowrap}
+  .p-port{background:#123522;color:#7ff0a8;border:1px solid #1f6b3f}
+  .p-adapt{background:#3a2e12;color:#ffcf7a;border:1px solid #7d5e24}
+  .p-hard{background:#3a1414;color:#ff9a9a;border:1px solid #7d2424}
+  ul{margin:10px 0 10px 4px;padding-left:20px} li{margin:6px 0}
+  .foot{color:var(--muted);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;background:#0b1020;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+  .tagrow{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Porting q36's engine ideas to ROCm / RDNA4</h1>
+  <p class="sub">Target: AMD Radeon AI PRO R9700 (gfx1201, 32 GB, ROCm 7.2.1) · Model: Qwen3.6-35B-A3B · Built on the R9700 + vLLM field series</p>
+
+  <div class="card">
+    <p style="margin-top:0"><b>The thesis in one paragraph.</b> q36 wins on the RTX 5090 through five ideas. Two are <b>hardware tricks</b> unique to Blackwell (native MXFP4 tensor-core math, single-instruction fp4→fp16) and do <b>not</b> port to RDNA4. Three are <b>architecture/systems ideas</b> (whole-token graph capture with zero host sync, a hybrid attention-KV + SSM-checkpoint cache, and batch-bucketed slot scheduling) that <b>port cleanly</b> and — critically — are things <b>no runtime on your R9700 does yet</b> (llama.cpp, vLLM, SGLang all leave the decode dispatch overhead and the SSM caching gap on the table). So the R9700 play is not "beat the 5090" — the memory bus forbids that — it's "wrap the INT4/FP8 kernels you already built inside q36's zero-sync decode loop and hybrid cache," which is exactly the decode/agentic gap your Part 4 and Part 9 identified.</p>
+  </div>
+
+  <div class="grid">
+    <div class="stat"><div class="l">Decode roofline (R9700)</div><div class="n">~234 t/s</div><div class="sub">640 GB/s ÷ 2.544 GiB/tok; ~152 realistic</div></div>
+    <div class="stat"><div class="l">vs 5090 roofline</div><div class="n">2.8× lower</div><div class="sub">640 vs 1790 GB/s bandwidth</div></div>
+    <div class="stat"><div class="l">Ports cleanly</div><div class="n" style="color:var(--good)">3 of 5</div><div class="sub">graph loop · hybrid cache · slot sched</div></div>
+    <div class="stat"><div class="l">Needs rework</div><div class="n" style="color:var(--warn)">2 of 5</div><div class="sub">MXFP4 MMA · fp4→fp16 convert</div></div>
+  </div>
+
+  <h2>1 · The hardware delta that decides everything</h2>
+  <table>
+    <thead><tr><th>Capability</th><th>RTX 5090 (Blackwell sm_120a)</th><th>R9700 (RDNA4 gfx1201)</th><th>Consequence for the port</th></tr></thead>
+    <tbody>
+      <tr><td>Memory bandwidth</td><td>1.79 TB/s (GDDR7)</td><td>~0.64 TB/s (GDDR6)</td><td>Decode ceiling 2.8× lower — hard cap, not a kernel problem</td></tr>
+      <tr><td>Native MXFP4 block-scaled MMA</td><td><b>Yes</b> — <code>mma…mxf8f6f4.block_scale</code> (W4A8, zero dequant)</td><td><b>No</b> — RDNA4 WMMA does FP8 &amp; INT4, but no OCP microscaling (that's CDNA4/MI350)</td><td>q36's #1 prefill trick has no direct analog → use FP8 or INT4 WMMA + a dequant/requant stage</td></tr>
+      <tr><td>1-instruction fp4→fp16</td><td><b>Yes</b> — <code>cvt.rn.f16x2.e2m1x2</code></td><td><b>No</b> — manual unpack (shift/mask/LUT)</td><td>This <em>is</em> the "−15% HIP decode to dequant" you measured in Part 4</td></tr>
+      <tr><td>Whole-graph capture</td><td>CUDA Graphs</td><td><b>HIP Graphs</b> (hipGraph)</td><td><span class="pill p-port">ports</span> — highest-value, lowest-risk win</td></tr>
+      <tr><td>Programmatic Dependent Launch</td><td>Yes (+2.4–3.7%)</td><td><b>No</b> equivalent</td><td>Lose the PDL edge overlap; minor</td></tr>
+      <tr><td>Tensor/Matrix engine</td><td>5th-gen Tensor Cores</td><td>RDNA4 WMMA (FP16/BF16/FP8/INT8/INT4 + sparsity)</td><td>rocBLAS + your wvSplitK/AWQ kernels already exploit this</td></tr>
+      <tr><td>Fits the 20.2 GB model in one card</td><td>Yes (32 GB)</td><td><b>Yes (32 GB)</b></td><td>Single-GPU zero-copy design point is <em>identical</em> — no multi-GPU needed</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Read this first.</b> Your R9700 has the same 32 GB and the same "whole model resident, batch-1 memory-bound decode" shape the 5090 engine is built around. What differs is bandwidth (fixed physics) and the two Blackwell-only quant instructions. So <b>everything q36 does that <em>isn't</em> those two instructions is fair game</b>, and most of it is stuff your current runtimes skip.</div>
+
+  <h2>2 · The R9700 decode roofline (set expectations before coding)</h2>
+  <p>Same math as q36's architecture doc, re-run for your card. This model reads <b>2.544 GiB of weights per token</b> (54.7% Q8_0 dense, 19.8% output head, 12.7% MXFP4 experts, the rest router/SSM gates):</p>
+  <table>
+    <thead><tr><th>GPU</th><th class="num">Bandwidth</th><th class="num">Absolute ceiling</th><th class="num">Realistic (~65%)</th><th class="num">q36 measured / target</th></tr></thead>
+    <tbody>
+      <tr><td>RTX 5090</td><td class="num">1.79 TB/s</td><td class="num">656 t/s</td><td class="num">426 t/s</td><td class="num">294 (measured)</td></tr>
+      <tr><td><b>R9700</b></td><td class="num">~640 GB/s</td><td class="num">~234 t/s</td><td class="num">~152 t/s</td><td class="num">~120–150 (target)</td></tr>
+    </tbody>
+  </table>
+  <p>For reference, your Part 4 numbers on <em>Qwen3-30B-A3B</em> (smaller, ~17 GB) were 108 t/s decode (Vulkan) / 92 (HIP). On the bigger 35B-A3B the per-token byte count is higher, so raw decode will be lower — but a zero-sync graph loop should recover much of the dispatch overhead that currently separates HIP from Vulkan, landing a single engine near the top of both.</p>
+
+  <h2>3 · Optimization-by-optimization port map</h2>
+  <table>
+    <thead><tr><th>q36 optimization</th><th>Ports to RDNA4?</th><th>How, on R9700</th><th>Reuse from your stack</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Whole-token graph capture</b><br><span class="sub">40-block forward + sampling as one replayable graph</span></td>
+        <td><span class="pill p-port">CLEAN</span></td>
+        <td>hipGraph capture/instantiate; one launch per token. Bucket batch to {8,16,32,48,64}, one graph each.</td>
+        <td>New driver code; wraps existing kernels</td>
+      </tr>
+      <tr>
+        <td><b>Zero host-sync decode + on-device sampling</b></td>
+        <td><span class="pill p-port">CLEAN</span></td>
+        <td>Keep token ids/positions/argmax in VRAM; temp/top-k/top-p as HIP kernels. Never block the host in the loop.</td>
+        <td><code>sgl_kernel</code>: <code>sampling</code>, <code>topk_softmax</code></td>
+      </tr>
+      <tr>
+        <td><b>Hybrid SSM/attention cache</b><br><span class="sub">paged KV for 10 attn layers, whole-state 63 MB checkpoint for 30 DeltaNet layers</span></td>
+        <td><span class="pill p-port">CLEAN</span> <span class="sub">(algorithmic)</span></td>
+        <td>Pure systems code: DRAM/disk LRU of the SSM blob, keyed on prompt tokens. Restores in ~ms. Genuinely novel on ROCm — paged-attention runtimes can't cache the recurrent layers.</td>
+        <td>New; your <code>kvcacheio</code> ops help for the attn side</td>
+      </tr>
+      <tr>
+        <td><b>Multi-slot batch scaling</b><br><span class="sub">GEMV &lt;16, tiled GEMM ≥16, slot-move compaction</span></td>
+        <td><span class="pill p-port">CLEAN</span></td>
+        <td>GEMV path = your AWQ GEMV; tiled path = wvSplitK / rocBLAS. Slot-move + bucketed graphs. Maps straight onto your 24-concurrent aggregate story.</td>
+        <td><code>awq_gemv_moe_hip</code>, <code>fused_moe_wvSplitK_int4_gemm</code>, <code>moe_align_block_size</code></td>
+      </tr>
+      <tr>
+        <td><b>MXFP4 experts fed to tensor cores, zero dequant</b><br><span class="sub">W4A8 block-scaled MMA</span></td>
+        <td><span class="pill p-adapt">REWORK</span></td>
+        <td>No microscaling MMA on RDNA4. Two options: <b>(a)</b> requant MXFP4→INT4 (AWQ-style) and use your wvSplitK INT4 MoE — cheapest, reuses tuned kernels; <b>(b)</b> upcast MXFP4→FP8 at load and use RDNA4 FP8 WMMA (W8A8) — higher quality, more VRAM/dequant. Pre-swizzle weights into WMMA fragment layout at load either way.</td>
+        <td><code>fused_moe_wvSplitK_int4_gemm</code>, <code>awq_dequantize</code></td>
+      </tr>
+      <tr>
+        <td><b>1-instruction fp4→fp16 on decode</b></td>
+        <td><span class="pill p-hard">GAP</span></td>
+        <td>No hardware converter. Mitigate with an LDS LUT, or avoid it: keep experts as INT4 (AWQ GEMV handles unpack) and note only 12.7% of decode bytes are fp4 anyway — the dominant 54.7% Q8_0 dense is a fast int8→fp16 path.</td>
+        <td><code>awq_gemv_hip</code> (does the unpack)</td>
+      </tr>
+      <tr>
+        <td><b>Programmatic Dependent Launch</b></td>
+        <td><span class="pill p-hard">N/A</span></td>
+        <td>No RDNA4 equivalent. Skip; it was +2–3% on Blackwell. Careful graph structuring recovers a little.</td>
+        <td>—</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4 · The two hard parts, in detail</h2>
+
+  <h3>4.1 The expert GEMM — where the Blackwell magic doesn't transfer</h3>
+  <p>q36's prefill lead (13.4k vs llama.cpp's 9.4k on the <em>same</em> card) comes almost entirely from feeding raw MXFP4 nibbles + their UE8M0 scales straight into the tensor core — no dequant, half the shared-memory traffic. RDNA4 has no block-scaled MMA, so you must pick your poison:</p>
+  <ul>
+    <li><b>Path A — INT4 (recommended first).</b> Requantize the MXFP4 experts to INT4 (AWQ) offline, and route the expert GEMM through the <code>fused_moe_wvSplitK_int4_gemm</code> you already built and validated on gfx1201. You lose the "zero dequant" property (there's an unpack), but you inherit a working, tuned kernel and native-AWQ loading path. This is the fastest route to a running engine.</li>
+    <li><b>Path B — FP8 W8A8 (higher ceiling).</b> Upcast MXFP4→FP8 (E4M3) at load, pre-swizzle into RDNA4 WMMA fragments, run W8A8. Better numerics and uses the matrix engine fully, but experts grow 4→8 bit in VRAM and you add a load-time expansion. Worth prototyping once Path A runs.</li>
+  </ul>
+  <div class="callout warn"><b>Expectation:</b> because neither path gets the zero-dequant win, R9700 prefill will trail the 5090 by <em>more</em> than the raw bandwidth ratio. Your llama.cpp HIP hit 3,491 t/s (pp512, 30B model) via rocBLAS; a pre-swizzled WMMA expert GEMM + mandatory flash-attention should beat that, but target the ~4–6k range, not 13k.</div>
+
+  <h3>4.2 The gated-DeltaNet scan — the one genuinely new kernel</h3>
+  <p>30 of 40 layers are recurrent (gated DeltaNet). On RDNA4 there is no llama.cpp/rocBLAS shortcut for this — it's the main <b>new HIP kernel</b> to write: a chunked scan where the intra-chunk part is a small matmul (WMMA-friendly) and the inter-chunk part is the sequential state carry. The good news: it's algorithm, not Blackwell hardware, so it ports as plain HIP. Check whether the vLLM/SGLang Triton "linear-attention / gated-deltanet" path (used for Qwen3-Next-style models) already compiles for gfx1201 in your SGLang tree — if so, it's a reference to validate against bit-for-bit.</p>
+
+  <h2>5 · What you can reuse vs. what's new</h2>
+  <div class="grid">
+    <div class="card"><b style="color:var(--good)">Reuse (already gfx1201-native)</b>
+      <ul>
+        <li><code>awq_gemv_hip</code> / <code>awq_gemv_moe_hip</code> — decode narrow-shape expert GEMV</li>
+        <li><code>fused_moe_wvSplitK_int4_gemm</code> — batched/prefill expert GEMM</li>
+        <li><code>sgl_kernel</code>: <code>topk_softmax</code> (router), <code>moe_align_block_size</code>, <code>silu_and_mul</code>, <code>rotary_embedding</code>, <code>attention</code> (FA), <code>sampling</code>, <code>kvcacheio</code></li>
+        <li>ROCm 7.2.1 + PyTorch 2.11+rocm7.2 toolchain, gfx1201 build recipes</li>
+      </ul>
+    </div>
+    <div class="card"><b style="color:var(--warn)">Build new (the q36 layer)</b>
+      <ul>
+        <li>Zero-sync per-token <b>hipGraph decode driver</b> (bucketed batch graphs)</li>
+        <li><b>Gated-DeltaNet chunked-scan</b> HIP kernel (the 30 SSM layers)</li>
+        <li><b>Hybrid state-checkpoint cache</b> (paged KV + 63 MB SSM blob, DRAM/disk LRU, prompt-keyed)</li>
+        <li>MXFP4→INT4/FP8 <b>load-time repack + WMMA pre-swizzle</b></li>
+        <li>On-device end-to-end sampling wired into the graph</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>6 · Suggested build order</h2>
+  <table>
+    <thead><tr><th>Phase</th><th>Goal</th><th>Why this order</th></tr></thead>
+    <tbody>
+      <tr><td><b>0. Correctness harness</b></td><td>CPU reference for MoE + DeltaNet forward, bit-exact compare (q36 ships <code>test_dequant</code>, <code>test_mma_bs</code> — mirror that idea)</td><td>Every kernel below validates against it; non-negotiable for a hybrid model</td></tr>
+      <tr><td><b>1. Prefill first</b></td><td>INT4 expert GEMM (reuse wvSplitK) + FA attention + DeltaNet chunked scan → match a known llama.cpp/SGLang prefill number</td><td>Compute-bound, easiest to validate, reuses most existing kernels</td></tr>
+      <tr><td><b>2. Zero-sync decode loop</b></td><td>hipGraph capture of the full token step, on-device sampling, AWQ GEMV experts</td><td>The biggest <em>portable</em> win; where you beat current runtimes on this card</td></tr>
+      <tr><td><b>3. Hybrid cache</b></td><td>Paged attn KV + SSM checkpoint LRU, prompt-keyed restore</td><td>Turns the agentic re-prefill cost (your Part 9 workload) into a ~ms restore</td></tr>
+      <tr><td><b>4. Batch/slots</b></td><td>Bucketed graphs, slot-move compaction, GEMV→tiled switch</td><td>Unlocks the 24-concurrent aggregate throughput you already care about</td></tr>
+      <tr><td><b>5. FP8 path (optional)</b></td><td>W8A8 experts via RDNA4 FP8 WMMA</td><td>Chase quality/prefill headroom once the engine runs end-to-end</td></tr>
+    </tbody>
+  </table>
+
+  <h2>7 · Realistic targets on R9700 (Qwen3.6-35B-A3B)</h2>
+  <table>
+    <thead><tr><th>Metric</th><th class="num">5090 / q36 (measured)</th><th class="num">R9700 target</th><th>Bounded by</th></tr></thead>
+    <tbody>
+      <tr><td>Prefill pp2048</td><td class="num">13,020 t/s</td><td class="num">~4,000–6,000</td><td>WMMA throughput + no zero-dequant MMA</td></tr>
+      <tr><td>Decode (fresh)</td><td class="num">259 t/s</td><td class="num">~120–150</td><td>640 GB/s bandwidth (hard cap ~234)</td></tr>
+      <tr><td>Decode @ 90k ctx</td><td class="num">179 t/s</td><td class="num">~90–110</td><td>Bandwidth + KV read growth</td></tr>
+      <tr><td>Aggregate @ ~24 slots</td><td class="num">~1,650 (B=64)</td><td class="num">~500–700</td><td>Compute-bound; scales with WMMA, not bandwidth</td></tr>
+      <tr><td>Agent re-prefill (78k turn)</td><td class="num">13.6 s → 0.4 s</td><td class="num">similar ratio</td><td>Cache is systems code — ports 1:1</td></tr>
+    </tbody>
+  </table>
+  <p class="sub">Aggregate and cache wins port best (compute/systems); single-stream decode and prefill are bandwidth/instruction-bound and will trail the 5090 — as physics demands.</p>
+
+  <h2>8 · Where this actually beats your current R9700 stack</h2>
+  <p>You already have vLLM, llama.cpp (HIP + Vulkan), and SGLang running on gfx1201. A q36-style engine isn't about replacing them — it's about the three things none of them do on this card:</p>
+  <ul>
+    <li><b>Whole-token graph capture with zero host sync</b> — directly attacks the "−15% HIP decode to dispatch/dequant" you measured in Part 4. This is how one HIP-based engine could match Vulkan's decode <em>and</em> keep HIP's prefill, collapsing your split-decision.</li>
+    <li><b>A cache that actually works for the recurrent layers</b> — paged-attention runtimes silently can't reuse the 30 DeltaNet layers' state; q36's whole-state checkpoint does, which is the difference between a 13.6 s and a 0.4 s agent re-prefill on the exact multi-turn workload from Parts 9–10.</li>
+    <li><b>Batch-bucketed graphs + slot compaction</b> — a cleaner path to your 450–480 tok/s aggregate than default MoE configs (recall Part 5's "No tuned config for E=128, N=384" warning).</li>
+  </ul>
+
+  <h2>9 · Open questions to resolve next</h2>
+  <ul>
+    <li>Does gfx1201 <b>hipGraph</b> capture the full forward reliably under ROCm 7.2.1, or are there kernels that break capture? (First thing to prototype.)</li>
+    <li>Is there a <b>gated-DeltaNet</b> reference already compiling in your SGLang gfx1201 tree (Qwen3-Next linear-attn path) to validate a new HIP scan against?</li>
+    <li>MXFP4→INT4 <b>quality</b>: measure perplexity delta of AWQ-INT4 experts vs the MXFP4 original before committing Path A.</li>
+    <li>Confirm the R9700's exact memory bandwidth from <code>rocm-smi --showbw</code> / spec to firm up the roofline (used ~640 GB/s here).</li>
+  </ul>
+
+  <div class="foot">
+    Companion to the RTX 5090 benchmark report. Sources: q36 <code>docs/ARCHITECTURE.md</code> + Makefile/bench.c; R9700 + vLLM field series (Parts 4–5, Pradeep Nallimelli). Targets are engineering estimates from the decode roofline and measured RDNA4 llama.cpp/SGLang numbers, not benchmarks — the point of the build is to replace them with real ones.
+  </div>
+
+</div>
+</body>
+</html>

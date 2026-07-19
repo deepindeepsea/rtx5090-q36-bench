@@ -1,0 +1,22 @@
+==== DOCKER llama-bench ubatch sweep Sat 07/18/2026 20:01:35.38 ==== 
+--- Free VRAM: unload LM Studio model server --- 
+ERROR: The process "llama-server.exe" not found.
+--- Run llama-bench: batch 4096, ubatch 2048 vs 4096 --- 
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 32606 MiB):
+  Device 0: NVIDIA GeForce RTX 5090, compute capability 12.0, VMM: yes, VRAM: 32606 MiB
+load_backend: loaded CUDA backend from /app/libggml-cuda.so
+load_backend: loaded CPU backend from /app/libggml-cpu-zen4.so
+| model                          |       size |     params | backend    | ngl | n_batch | n_ubatch |  fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | ------: | -------: | --: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     2048 |   1 |          pp2048 |    4705.25 ± 1822.85 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     2048 |   1 |          pp4096 |    10623.96 ± 374.67 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     2048 |   1 |          pp8192 |     11090.46 ± 19.64 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     2048 |   1 |           tg128 |        242.99 ± 1.59 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     4096 |   1 |          pp2048 |     11125.35 ± 76.89 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     4096 |   1 |          pp4096 |     11383.47 ± 34.94 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     4096 |   1 |          pp8192 |     11303.36 ± 86.24 |
+| qwen35moe 35B.A3B Q4_K - Medium |  19.70 GiB |    34.66 B | CUDA       |  99 |    4096 |     4096 |   1 |           tg128 |        246.73 ± 1.14 |
+
+build: 86a9c79f8 (10066)
+EXIT_CODE=0 
+==== DONE ==== 
